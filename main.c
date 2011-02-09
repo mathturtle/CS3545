@@ -2,34 +2,71 @@
  * main.c
  *
  *  Created on: Jan 26, 2011
- *      Author: shawn
+ *      Author: Clinton Freeman
+ *      Hacker such that it is unrecognizable: Shawn Waldon & Ryan Belt
  */
 
 #include <SDL.h>
 #include <SDL_main.h>
 #include <SDL_opengl.h>
+#include <SDL_keysym.h>
 #include <stdio.h>
+#include <math.h>
+#include "headers/vector_math.h"
+#include "headers/camera_angling.h"
 
+//Means of the user exiting the main loop - it is static because it will not be seen outside of this file.
 static int user_exit = 0;
 
-static void r_init();
-static void r_drawFrame();
+static float root3over4 = sqrt(3)/4.0;
 
+
+static float RED[3] =   {1.0,0.0,0.0};
+static float GREEN[3] = {0.0,1.0,0.0};
+static float BLUE[3] =  {0.0,0.0,1.0};
+
+static int keys_down[256];
+static void input_update(CAMERA_POSITION *cam);
+static void resetCamera(CAMERA_POSITION *camera);
+static void input_keyDown(SDLKey k);
+static void randomizeColors(float **colors);
+static void input_keyUp(SDLKey k);
+
+
+//Added two new functions - also static as they will not be used outside of this file.
+//Eventually these will be moved out of here into a "rendering" subsystem, which is why they are prefixed r_.
+static void r_init(CAMERA_POSITION *cam);
+static void r_reset(CAMERA_POSITION *cam);
+static void r_drawFrame(float **colors);
+
+//Program entry point
 int SDL_main(int argc, char* argv[])
 {
-	SDL_Event		event;
-	SDL_Surface		*screen;
+	int i;
+	SDL_Event	event;		//Used for handling input events, as you can see later on.
+	SDL_Surface	*screen;	//http://www.libsdl.org/cgi/docwiki.cgi/SDL_Surface
+	CAMERA_POSITION camera;
+	float *colors[3] = {&RED[0], &GREEN[0], &BLUE[0]};
 
+	for (i = 0; i < 256; i++) {
+		keys_down[i] = 0;
+	}
+	resetCamera(&camera);
+
+	//The following is pretty self-explanatory
 	if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER) != 0)
 	{
 		printf("Unable to initialize SDL: %s\n", SDL_GetError());
 		return 1;
 	}
 
-	SDL_WM_SetCaption("SDL Window", "SDL Window");
+	//You can of course customize this.
+	SDL_WM_SetCaption("Perspective Projection", "Perspective Projection");
+
+	//We need to explicitly enable double buffering
 	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-	//Initialize window
+	//Initialize window, setting the resolution to 1024x768 @ 32 bits per pixel. We want an OpenGL window.
 	screen = SDL_SetVideoMode(1024, 768, 32, SDL_OPENGL);
 	if(!screen)
 	{
@@ -37,9 +74,11 @@ int SDL_main(int argc, char* argv[])
 		return 1;
 	}
 
-	r_init();
+	//Any other one-time initialization would typically go here.
+	//"Renderer" initialization
+	r_init(&camera);
 
-	//Main loop
+	//This is what is referred to as the "game loop." Obviously there is not much here currently.
 	while(!user_exit)
 	{
 		//Handle input
@@ -48,37 +87,203 @@ int SDL_main(int argc, char* argv[])
 			switch(event.type)
 			{
 			case SDL_KEYDOWN:
+				input_keyDown(event.key.keysym.sym);
+				break;
 			case SDL_KEYUP:
+				input_keyUp(event.key.keysym.sym);
+				break;
+			case SDL_MOUSEBUTTONDOWN:
+				randomizeColors(colors);
+				break;
 			case SDL_MOUSEMOTION:
 				break;
 			case SDL_QUIT:
-				user_exit = 1;
+				exit(0);
 			}
 		}
+		input_update(&camera);
 
-		r_drawFrame();
+		//Here is where you will do any OpenGL drawing. You would also do things like update moving objects, etc.
+		//Do whatever we need to do to draw a single image.
+		r_drawFrame(colors);
 	}
 
+	//Shut down SDL
 	SDL_Quit();
 
+	//Everything went OK.
 	return 0;
 }
 
-static void r_init()
+static void r_init(CAMERA_POSITION *cam)
 {
-	//nothing for now
+	//Enable depth buffering
+	glEnable(GL_DEPTH_TEST);
+
+	//Change to projection mode (three modes: modelview, projection, and texture
+	//we will be using the just the first two)
+	glMatrixMode(GL_PROJECTION);
+	//Load the identity matrix
+	glLoadIdentity();
+	//Generate a perspective projection matrix using the following parameters
+	//90 degree field of view (horizontal), 1.33 aspect ratio (width/height of viewport)
+	//Distance to the nearplane (must be positive), distance to the farplane (also positive).
+	gluPerspective(90.0, 1.33, 0.1, 30.0);
+	// set up and load the model view matrix for this camera
+	setUpAndLoadModelViewMatrix(cam);
+
+	glEnable(GL_CULL_FACE);
+
+	glCullFace(GL_BACK);
+
 }
 
-static void r_drawFrame()
+static void r_reset(CAMERA_POSITION *cam)
 {
+	resetCamera(cam);
+	setUpAndLoadModelViewMatrix(cam);
+}
+
+//Produces a simple image
+static void r_drawFrame(float **colors)
+{
+	// Clear the color buffer (these are the final values that get sent to the monitor).
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+	// White triangle
 	glColor3f(1.0, 1.0, 1.0);
-	glBegin(GL_POLYGON);
-		glVertex3f(-0.5, 0.0, 0.0);
-		glVertex3f(0.5, 0.0, 0.0);
-		glVertex3f(0.0, 1.0, 0.0);
+
+	// first face
+	glBegin(GL_TRIANGLES);
+		glColor3fv(colors[0]);
+		glVertex3f(-0.5, -root3over4, -root3over4);
+		glColor3fv(colors[1]);
+		glVertex3f( 0.5, -root3over4, -root3over4);
+		glColor3fv(colors[2]);
+		glVertex3f( 0.0,  0.0, root3over4);
 	glEnd();
 
+	// second face
+	glBegin(GL_TRIANGLES);
+		glColor3fv(colors[2]);
+		glVertex3f(0.5, -root3over4, -root3over4);
+		glColor3fv(colors[0]);
+		glVertex3f( 0.0, root3over4, -root3over4);
+		glColor3fv(colors[1]);
+		glVertex3f( 0.0,  0.0, root3over4);
+	glEnd();
+
+	// third face
+	glBegin(GL_TRIANGLES);
+		glColor3fv(colors[1]);
+		glVertex3f(-0.5, -root3over4, -root3over4);
+		glColor3fv(colors[2]);
+		glVertex3f( 0.0, 0.0, root3over4);
+		glColor3fv(colors[0]);
+		glVertex3f( 0.0,  root3over4, -root3over4);
+	glEnd();
+
+	// base
+	glBegin(GL_TRIANGLES);
+		glColor3fv(colors[1]);
+		glVertex3f(0.0, root3over4, -root3over4);
+		glColor3fv(colors[0]);
+		glVertex3f( 0.5, -root3over4, -root3over4);
+		glColor3fv(colors[2]);
+		glVertex3f( -0.5,  -root3over4, -root3over4);
+	glEnd();
+
+	//The view frustum at this point is still pointing down the negative Z (into the monitor).
+	//The near plane is located at Z = -1.0, and the far plane at Z = -10.0.
+	//This means, as before, drawing things at > -1.0 will lead to them being clipped out
+	//of the view. (Actually, it isn't quite that accurate, primitives at -1.0 get clipped
+	//as well).
+	//Try playing around with moving the triangle further away from the nearplane, (i.e. decreasing
+	//the Z values (-6.0, -7.0, etc.). You should notice it shrinking.
+	//Also, it is probably best to view a 3D object to see the effects of the perspective projection.
+	//Try making a cube using GL_QUADS or GL_POLYGON, and placing it offset from the center. You should
+	//see a foreshortening effect.
+
+	//Swap the front and back frame buffers to display the image in our window.
 	SDL_GL_SwapBuffers();
+}
+
+static void input_update(CAMERA_POSITION *cam) {
+	if (keys_down[SDLK_DOWN]) {
+		cam->rot_x -= 0.0001;
+		setUpAndLoadModelViewMatrix(cam);
+	} else if (keys_down[SDLK_UP]) {
+		cam->rot_x += 0.0001;
+		setUpAndLoadModelViewMatrix(cam);
+	}
+	if (keys_down[SDLK_RIGHT]) {
+		cam->rot_y -= 0.0001;
+		setUpAndLoadModelViewMatrix(cam);
+	} else if (keys_down[SDLK_LEFT]) {
+		cam->rot_y += 0.0001;
+		setUpAndLoadModelViewMatrix(cam);
+	}
+	if (keys_down[SDLK_q]) {
+		cam->rot_z += 0.0001;
+		setUpAndLoadModelViewMatrix(cam);
+	} else if (keys_down[SDLK_e]) {
+		cam->rot_z -= 0.0001;
+		setUpAndLoadModelViewMatrix(cam);
+	}
+
+	if (keys_down[SDLK_w]) {
+		cam->offset[2] += 0.001;
+		setUpAndLoadModelViewMatrix(cam);
+	} else if (keys_down[SDLK_s]) {
+		cam->offset[2] -= 0.001;
+		setUpAndLoadModelViewMatrix(cam);
+	}
+
+	if (keys_down[SDLK_a]) {
+		cam->offset[0] += 0.001;
+		setUpAndLoadModelViewMatrix(cam);
+	} else if (keys_down[SDLK_d]) {
+		cam->offset[0] -= 0.001;
+		setUpAndLoadModelViewMatrix(cam);
+	}
+
+	if (keys_down[SDLK_SPACE]) {
+		cam->offset[1] -= 0.001;
+		setUpAndLoadModelViewMatrix(cam);
+	} else if (keys_down[SDLK_c]) {
+		cam->offset[1] += 0.001;
+		setUpAndLoadModelViewMatrix(cam);
+	}
+
+
+
+	if(keys_down[SDLK_r]) {
+		r_reset(cam);
+	}
+}
+static void input_keyDown(SDLKey k) {
+	keys_down[k] = 1;
+	if(k == SDLK_ESCAPE) user_exit = 1;
+}
+static void input_keyUp(SDLKey k) {
+	keys_down[k] = 0;
+}
+
+static void resetCamera(CAMERA_POSITION *camera) {
+	camera->offset[0] = 0;
+	camera->offset[1] = 0;
+	camera->offset[2] = -3;
+	camera->rot_x = 0;
+	camera->rot_y = 0;
+	camera->rot_z = 0;
+}
+
+static void randomizeColors(float **colors) {
+	int i;
+	for (i = 2; i > 0; i--) {
+		float *c = colors[i];
+		int r = (int) (drand48() * (i+1));
+		colors[i] = colors[r];
+		colors[r] = c;
+	}
 }
