@@ -12,7 +12,9 @@
 #include <SDL_keysym.h>
 #include <stdio.h>
 #include <math.h>
+#include "headers/types.h"
 #include "headers/vector_math.h"
+#include "headers/rendererMagicNumbers.h"
 #include "headers/camera_angling.h"
 
 //Means of the user exiting the main loop - it is static because it will not be seen outside of this file.
@@ -28,9 +30,11 @@ static float BLUE[3] =  {0.0,0.0,1.0};
 static int keys_down[256];
 static void input_update(CAMERA_POSITION *cam);
 static void resetCamera(CAMERA_POSITION *camera);
-static void input_keyDown(SDLKey k);
+static void input_keyDown(SDLKey k, CAMERA_POSITION *cam);
 static void randomizeColors(float **colors);
 static void input_keyUp(SDLKey k);
+
+static void input_mouseMoved(CAMERA_POSITION *cam, int x, int y);
 
 
 //Added two new functions - also static as they will not be used outside of this file.
@@ -81,13 +85,15 @@ int SDL_main(int argc, char* argv[])
 	//This is what is referred to as the "game loop." Obviously there is not much here currently.
 	while(!user_exit)
 	{
+		bool mouseMoved = FALSE;
+		int x = 0, y = 0;
 		//Handle input
 		while(SDL_PollEvent(&event))
 		{
 			switch(event.type)
 			{
 			case SDL_KEYDOWN:
-				input_keyDown(event.key.keysym.sym);
+				input_keyDown(event.key.keysym.sym, &camera);
 				break;
 			case SDL_KEYUP:
 				input_keyUp(event.key.keysym.sym);
@@ -96,12 +102,19 @@ int SDL_main(int argc, char* argv[])
 				randomizeColors(colors);
 				break;
 			case SDL_MOUSEMOTION:
+				x = event.motion.x;
+				y = event.motion.y;
+				mouseMoved = TRUE;
 				break;
 			case SDL_QUIT:
 				exit(0);
 			}
 		}
 		input_update(&camera);
+		if (mouseMoved) {
+			input_mouseMoved(&camera, x, y);
+			setUpAndLoadModelViewMatrix(&camera);
+		}
 
 		//Here is where you will do any OpenGL drawing. You would also do things like update moving objects, etc.
 		//Do whatever we need to do to draw a single image.
@@ -193,6 +206,24 @@ static void r_drawFrame(float **colors)
 		glVertex3f( -0.5,  -root3over4, -root3over4);
 	glEnd();
 
+	glBegin(GL_LINES);
+		// x axis from grey to red (red is +x)
+		glColor3f(.5,.5,.5);
+		glVertex3f(-5,0,0);
+		glColor3f(1,0,0);
+		glVertex3f(5,0,0);
+		// y axis from grey to green (green is +y)
+		glColor3f(.5,.5,.5);
+		glVertex3f(0,-5,0);
+		glColor3f(0,1,0);
+		glVertex3f(0,5,0);
+		// z axis from grey to blue (blue is +z)
+		glColor3f(.5,.5,.5);
+		glVertex3f(0,0,-5);
+		glColor3f(0,0,1);
+		glVertex3f(0,0,5);
+	glEnd();
+
 	//The view frustum at this point is still pointing down the negative Z (into the monitor).
 	//The near plane is located at Z = -1.0, and the far plane at Z = -10.0.
 	//This means, as before, drawing things at > -1.0 will lead to them being clipped out
@@ -210,50 +241,50 @@ static void r_drawFrame(float **colors)
 
 static void input_update(CAMERA_POSITION *cam) {
 	if (keys_down[SDLK_DOWN]) {
-		cam->rot_x -= 0.0001;
+		rotateCamera_X(cam, 0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	} else if (keys_down[SDLK_UP]) {
-		cam->rot_x += 0.0001;
+		rotateCamera_X(cam, -0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	}
 	if (keys_down[SDLK_RIGHT]) {
-		cam->rot_y -= 0.0001;
+		rotateCamera_Z(cam, 0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	} else if (keys_down[SDLK_LEFT]) {
-		cam->rot_y += 0.0001;
+		rotateCamera_Z(cam, -0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	}
 	if (keys_down[SDLK_q]) {
-		cam->rot_z += 0.0001;
+		rotateCamera_Y(cam, -0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	} else if (keys_down[SDLK_e]) {
-		cam->rot_z -= 0.0001;
+		rotateCamera_Y(cam, 0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	}
 
 	if (keys_down[SDLK_w]) {
-		cam->offset[2] += 0.001;
+		moveCameraForward(cam,0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	} else if (keys_down[SDLK_s]) {
-		cam->offset[2] -= 0.001;
+		moveCameraForward(cam,-0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	}
 
 	if (keys_down[SDLK_a]) {
-		cam->offset[0] += 0.001;
+		moveCameraStrafe(cam, -0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	} else if (keys_down[SDLK_d]) {
-		cam->offset[0] -= 0.001;
+		moveCameraStrafe(cam, 0.005);
 		setUpAndLoadModelViewMatrix(cam);
 	}
 
-	if (keys_down[SDLK_SPACE]) {
-		cam->offset[1] -= 0.001;
-		setUpAndLoadModelViewMatrix(cam);
-	} else if (keys_down[SDLK_c]) {
-		cam->offset[1] += 0.001;
-		setUpAndLoadModelViewMatrix(cam);
-	}
+//	if (keys_down[SDLK_SPACE]) {
+//		cam->offset[1] -= 0.001; // -y
+//		setUpAndLoadModelViewMatrix(cam);
+//	} else if (keys_down[SDLK_c]) {
+//		cam->offset[1] += 0.001; // +y
+//		setUpAndLoadModelViewMatrix(cam);
+//	}
 
 
 
@@ -261,9 +292,10 @@ static void input_update(CAMERA_POSITION *cam) {
 		r_reset(cam);
 	}
 }
-static void input_keyDown(SDLKey k) {
+static void input_keyDown(SDLKey k, CAMERA_POSITION *cam) {
 	keys_down[k] = 1;
 	if(k == SDLK_ESCAPE) user_exit = 1;
+	if(k == SDLK_BACKQUOTE) cam->isFree = !cam->isFree;
 }
 static void input_keyUp(SDLKey k) {
 	keys_down[k] = 0;
@@ -271,11 +303,12 @@ static void input_keyUp(SDLKey k) {
 
 static void resetCamera(CAMERA_POSITION *camera) {
 	camera->offset[0] = 0;
-	camera->offset[1] = 0;
-	camera->offset[2] = -3;
+	camera->offset[1] = -3;
+	camera->offset[2] = 0;
 	camera->rot_x = 0;
 	camera->rot_y = 0;
 	camera->rot_z = 0;
+	camera->isFree = TRUE;
 }
 
 static void randomizeColors(float **colors) {
@@ -286,4 +319,18 @@ static void randomizeColors(float **colors) {
 		colors[i] = colors[r];
 		colors[r] = c;
 	}
+}
+
+static void input_mouseMoved(CAMERA_POSITION *cam, int x, int y) {
+	float halfWinHeight = (float)WINDOW_HEIGHT/2.0;
+	float halfWinWidth = (float)WINDOW_WIDTH/2.0;
+
+	float dx = x-halfWinWidth;
+	float dy = y-halfWinHeight;
+
+	rotateCamera_X(cam, dy/120.0);
+	rotateCamera_Z(cam, dx/120.0);
+
+	//Reset cursor to center
+	SDL_WarpMouse(halfWinWidth, halfWinHeight);
 }
